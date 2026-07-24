@@ -1,7 +1,11 @@
 #!/bin/bash
 
 SCRIPT_REPO="https://github.com/intel/libva.git"
-SCRIPT_COMMIT="6b07f7100512817f736967e899b8c26313c20623"
+# Pinned to libva 2.20.0 (tag 2.20.0). Newer libva makes ffmpeg import symbols
+# absent from distros still on 2.20 (e.g. Ubuntu 24.04 LTS, frozen at 2.20.0),
+# breaking VA-API at runtime since linux64 links libva as an import lib against
+# the system libva.so.2. See ErsatzTV/legacy#1979.
+SCRIPT_COMMIT="907b2b5405ca1091b4360bf35060e143bd704b62"
 
 ffbuild_depends() {
     echo base
