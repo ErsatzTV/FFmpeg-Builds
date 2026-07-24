@@ -26,8 +26,19 @@ GIT_BRANCH="${GIT_BRANCH_OVERRIDE:-$GIT_BRANCH}"
 
 # Marker appended to the FFmpeg version so a patched build is distinguishable
 # from a stock release. Drives both the artifact filename and `ffmpeg -version`.
+# Defaults to the short commit of this repo, which pins everything that makes
+# the build non-stock: the patches in ffmpeg-patches/, the pinned dependency
+# versions in scripts.d/ and the configure flags. Uncommitted or untracked
+# files (an unapplied-to-git patch is still applied to FFmpeg) mark it -dirty.
 # Override with FFBUILD_VERSION_SUFFIX= (empty) to get the unmodified naming.
-FFBUILD_VERSION_SUFFIX="${FFBUILD_VERSION_SUFFIX-t11674}"
+if [[ -z "${FFBUILD_VERSION_SUFFIX+x}" ]]; then
+    if GIT_REV="$(git rev-parse --short=8 HEAD 2>/dev/null)"; then
+        [[ -n "$(git status --porcelain 2>/dev/null)" ]] && GIT_REV="${GIT_REV}-dirty"
+        FFBUILD_VERSION_SUFFIX="etv-g${GIT_REV}"
+    else
+        FFBUILD_VERSION_SUFFIX=""
+    fi
+fi
 
 BUILD_SCRIPT="$(mktemp)"
 trap "rm -f -- '$BUILD_SCRIPT'" EXIT
