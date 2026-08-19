@@ -1,0 +1,23 @@
+id: avfilter-requested-hw-frame-size
+patch: avfilter-requested-hw-frame-size.patch
+based_on: n8.1.2
+status: carried
+upstream:
+  issue: https://trac.ffmpeg.org/ticket/11674
+  commits: []
+dependencies: []
+platforms:
+  - linux-cuda
+  - linux-vaapi
+reproducer: tests/avfilter-requested-hw-frame-size.sh
+samples:
+  - path: samples/h264-1920x1080-coded-1088.mkv
+    sha256: "..."
+failure_without_patch:
+  - "output height is 1088 or hwupload returns -22"
+success_with_patch:
+  - "output height is 1080"
+last_verified:
+  version: n8.1.2
+  date: 2026-08-19
+remove_when: "An equivalent upstream fix is present and the unpatched reproducer passes"
