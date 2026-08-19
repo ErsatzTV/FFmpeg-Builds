@@ -39,9 +39,16 @@ notes:
 last_verified:
   version: n8.1.2
   date: 2026-08-19
+  builds:
+    without_patch: n8.1.2-20260813-etv-g25d21b2c   # 0006 only
+    with_patch:    n8.1.2-20260819-etv-g3c0520f9   # 0006 + 0007
   how: >-
-    Failure reproduced against the shipped n8.1.2-20260813-etv-g25d21b2c build
-    (0006 applied, 0007 not): reproducer reports 14.00s stall. Patch itself is
-    NOT yet compile- or runtime-verified - it has only been confirmed to apply
-    cleanly on top of 0006.
+    Reproducer: 14.00s stall / exit 1 without the patch, 0.51s / exit 0 with it.
+    Pacing still tracks readrate (ratio converges to 1.048 over 90s, linear, no
+    free-running). strace of clock_nanosleep: longest single sleep drops from
+    41.751s to 0.038s, with zero sleeps >= 1s. Full ErsatzTV vaapi pipeline
+    (two inputs, overlay_vaapi burn-in, HLS) on the original 132MB source runs
+    120s of media in 116.79s wall with no stall after startup - including the
+    42.80s subtitle gap at 111.44 that previously caused a 41.751s freeze.
+    Sparse-only fallback confirmed unchanged from the pre-0007 build.
 remove_when: "An equivalent upstream fix is present and the unpatched reproducer passes"
