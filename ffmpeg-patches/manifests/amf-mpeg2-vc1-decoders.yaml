@@ -1,0 +1,80 @@
+id: amf-mpeg2-vc1-decoders
+patch: 0011-lavc-amfdec-add-mpeg2_amf-and-vc1_amf-decoders.patch
+based_on: n8.1.2
+status: local
+upstream:
+  issue: null
+  commits: []
+  # Not reported. amfdec.c in FFmpeg master (2026-09-16) still wraps only the
+  # H.264, HEVC, VP9 and AV1 components even though the AMF SDK has exposed
+  # AMFVideoDecoderUVD_MPEG2 and AMFVideoDecoderUVD_VC1 since 1.4. The patch is
+  # small and self-contained enough to send upstream once it has been exercised
+  # on real content; see last_verified for what is and is not covered yet.
+dependencies: []
+platforms:
+  - windows-amf               # amfdec.c is built wherever --enable-amf is, so
+  - linux-amf                 # the Linux amdgpu-pro runtime is in scope too
+reproducer: tests/amf-mpeg2-decoder.sh
+samples: []                   # synthetic MPEG-2 from lavfi; VC-1 needs VC1_SAMPLE (see notes)
+failure_without_patch:
+  - "'mpeg2_amf' and 'vc1_amf' are absent from ffmpeg -decoders"
+  - "-hwaccel amf on an mpeg2video input decodes in SOFTWARE with no warning: the
+     verbose log never prints \"Selecting decoder 'mpeg2_amf'\" and vpp_amf uploads
+     the system frames itself, so the run succeeds and looks accelerated"
+  - "reproducer case decoder-listed fails, and mpeg2-progressive / mpeg2-interlaced
+     fail on the missing decoder selection line; exit 1"
+success_with_patch:
+  - "ffmpeg -decoders lists mpeg2_amf and vc1_amf"
+  - "-hwaccel amf on mpeg2video logs \"Selecting decoder 'mpeg2_amf'\" and decodes
+     every frame on the device; reproducer exits 0"
+notes:
+  - "MECHANISM: -hwaccel amf works by swapping the native decoder for the
+     <codec>_amf wrapper (ffmpeg_dec.c), so a codec without a wrapper silently
+     stays in software. amfdec.c is codec-agnostic apart from the switch that maps
+     AVCodecID to an AMF component id and the DEFINE_AMF_DECODER list; the patch
+     adds MPEG2VIDEO -> AMFVideoDecoderUVD_MPEG2 and VC1 -> AMFVideoDecoderUVD_VC1
+     to both, plus the usual configure/allcodecs/Makefile registration."
+  - "HARDWARE SUPPORT IS PER GPU, not per driver. Measured with the AMF SDK caps
+     query (ErsatzTV next, probe_capabilities amf --adapter N) on runtime 1.4.37:
+       RX 6600M (RDNA2, VCN 3.0):   MPEG2 hardware NV12 <= 1920x1080,
+                                    VC1 hardware NV12 <= 1920x1080
+       Radeon 680M (Rembrandt APU): MPEG2 and VC1 GetCaps fail (no such hardware)
+     AMD dropped MPEG-2/VC-1 decode from the newer VCN blocks, so RDNA3 and later
+     will match the 680M. The ErsatzTV probe only advertises the decoder when the
+     component reports caps, and only when ffmpeg -decoders lists <codec>_amf, so
+     an unpatched or unsupported build falls back to software decode by design."
+  - "INTERLACED MPEG-2 (most broadcast/DVD sources) should be downloaded right
+     after decode, the same workaround ErsatzTV applies to interlaced H.264 on AMF:
+     the decoder stamps field-pair surfaces and h264_amf then switches into an
+     interlaced scan mode that stalls. The reproducer's mpeg2-interlaced case uses
+     hwdownload + bwdif for that reason; do not 'fix' it to stay on the device."
+  - "VC-1 IS UNTESTED END TO END. ffmpeg has no VC-1 encoder, so there is no
+     synthetic source; the reproducer runs a vc1 case only when VC1_SAMPLE points
+     at an Advanced Profile stream (MKV/MP4 with start codes). WMV3 (Simple/Main
+     profile in .wmv) is NOT covered: the SDK's separate WMV3 component reports
+     'not supported' on both GPUs above, and the patch maps only AV_CODEC_ID_VC1."
+  - "No bitstream filter is attached to either decoder. MPEG-2 packets are already
+     an elementary stream; extradata (MP4/MKV sequence header) goes through the
+     existing AMF_VIDEO_DECODER_EXTRADATA path. If VC-1 fails to init, the first
+     thing to check is whether the container's packets carry 0x000001 start codes."
+  - "MPEG-1 is not mapped. The DXVA MPEG2and1 profile suggests the hardware could
+     take it, but the AMF component id says MPEG2 and nothing here verifies MPEG-1."
+last_verified:
+  version: n8.1.2
+  date: 2026-09-16
+  builds:
+    without_patch: n8.1.2-20260907-etv-g14f231eb
+    with_patch:    null    # NOT BUILT YET - fill in after the first patched build
+  how: >-
+    Only the pre-build half is verified. On the unpatched etv build,
+    'ffmpeg -decoders' has no mpeg2_amf, and -hwaccel amf on a synthetic 1080p
+    MPEG-2 TS decodes 60/60 frames in software (16.9x realtime, no decoder
+    selection line, exit 0), which is what the reproducer's decoder-listed case
+    turns into a failure. That the AMF components exist and report hardware
+    acceleration on the RX 6600M was confirmed through the SDK caps query, not
+    through ffmpeg. Decoding through amfdec.c itself, B-frame reordering, and
+    timestamps have not been exercised: run tests/amf-mpeg2-decoder.sh on the
+    first patched build and record the result here.
+remove_when: >-
+  Upstream amfdec.c registers mpeg2_amf (and vc1_amf) itself, i.e. the
+  decoder-listed case passes on a stock build of the pinned version.
