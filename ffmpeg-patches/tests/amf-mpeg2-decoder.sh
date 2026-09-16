@@ -30,22 +30,41 @@
 #
 #   vc1                Only when VC1_SAMPLE is set (ffmpeg cannot encode VC-1).
 #                      Advanced Profile stream expected. Same checks as
-#                      mpeg2-progressive with vc1_amf.
+#                      mpeg2-progressive with vc1_amf, plus a timestamp check on
+#                      the first 10 s: output pts must be monotonic. KNOWN TO
+#                      FAIL on VC-1 in MKV as of the g6a8e4827 build: the runtime
+#                      stamps each picture with its own packet's pts and MKV
+#                      carries VC-1 timestamps in decode order, so pts swap in
+#                      pairs and a cfr encode dups/drops a third of the frames.
+#                      The pictures themselves are correct. ErsatzTV does not
+#                      use vc1_amf until this is solved; see the manifest.
+#
+#   unsupported-gpu    Only when UNSUPPORTED_INIT_HW_DEVICE names an AMD adapter
+#                      WITHOUT MPEG-2 hardware (an APU such as the Radeon 680M).
+#                      The runtime still creates the component there, then
+#                      SubmitInput() returns AMF_NOT_SUPPORTED (10) and ffmpeg
+#                      crashes with a segfault on the way out. Passes when ffmpeg
+#                      exits non-zero WITHOUT a signal and logs that the device
+#                      has no decoder for the codec. Never claims software
+#                      fallback: -hwaccel amf has none once the wrapper decoder
+#                      has been selected.
 #
 # Usage: amf-mpeg2-decoder.sh [/path/to/ffmpeg]
 #        FFMPEG=/path/to/ffmpeg amf-mpeg2-decoder.sh
 #        CASES="decoder-listed mpeg2-progressive" amf-mpeg2-decoder.sh
 #        INIT_HW_DEVICE="-init_hw_device d3d11va=dx:1 -init_hw_device amf=hw@dx" amf-mpeg2-decoder.sh
 #        VC1_SAMPLE=/path/to/vc1.mkv amf-mpeg2-decoder.sh
+#        UNSUPPORTED_INIT_HW_DEVICE="-init_hw_device d3d11va=dx:0 -init_hw_device amf=hw@dx" amf-mpeg2-decoder.sh
 #
 # Exit: 0 all runnable cases passed, 1 any case failed, 77 nothing was runnable.
 
 set -uo pipefail
 
 FFMPEG="${1:-${FFMPEG:-ffmpeg}}"
-CASES="${CASES:-decoder-listed mpeg2-progressive mpeg2-interlaced vc1}"
+CASES="${CASES:-decoder-listed mpeg2-progressive mpeg2-interlaced vc1 unsupported-gpu}"
 INIT_HW_DEVICE="${INIT_HW_DEVICE:--init_hw_device amf=hw}"
 VC1_SAMPLE="${VC1_SAMPLE:-}"
+UNSUPPORTED_INIT_HW_DEVICE="${UNSUPPORTED_INIT_HW_DEVICE:-}"
 TIMEOUT_S="${TIMEOUT_S:-60}"
 
 FRAMES=60   # 2 s at 30 fps for the synthetic sources
@@ -170,6 +189,48 @@ for c in $CASES; do
                 continue
             fi
             run_decode "$c" "$VC1_SAMPLE" vc1_amf "vpp_amf=w=1280:h=720:format=nv12,setsar=1" any
+            # decode order vs display order: pts out of the wrapper must not go backwards
+            ptslog="$WORK/$c.pts"
+            # shellcheck disable=SC2086
+            "${BOUND[@]}" "$FFMPEG" -hide_banner -v info \
+                $INIT_HW_DEVICE -hwaccel amf -hwaccel_output_format amf \
+                -t 10 -i "$VC1_SAMPLE" -an -sn -vf "hwdownload,format=nv12,showinfo" -f null - 2>&1 \
+                | sed -n 's/.*n: *[0-9]* pts: *\([0-9]*\) pts_time.*/\1/p' >"$ptslog"
+            backwards="$(awk 'NR>1 && $1<=p {c++} {p=$1} END {print c+0}' "$ptslog")"
+            if [ -s "$ptslog" ] && [ "$backwards" -eq 0 ]; then
+                report "$c-timestamps" 1 "$(wc -l <"$ptslog") frames, pts monotonic"
+            else
+                report "$c-timestamps" 0 "$backwards backwards pts steps in $(wc -l <"$ptslog") frames (head: $(head -6 "$ptslog" | tr '\n' ' '))"
+            fi
+            ;;
+        unsupported-gpu)
+            if [ -z "$UNSUPPORTED_INIT_HW_DEVICE" ]; then
+                echo "SKIP  $c  set UNSUPPORTED_INIT_HW_DEVICE to an AMD adapter without MPEG-2 hardware to run this case"
+                continue
+            fi
+            src="$WORK/1080p_mpeg2_unsupported.ts"
+            if ! make_mpeg2 "$src" 0; then
+                report "$c" 0 "could not encode the synthetic source"
+                continue
+            fi
+            log="$WORK/$c.log"
+            # shellcheck disable=SC2086
+            "${BOUND[@]}" "$FFMPEG" -hide_banner -v verbose \
+                $UNSUPPORTED_INIT_HW_DEVICE -filter_hw_device hw \
+                -hwaccel amf -hwaccel_output_format amf \
+                -i "$src" -an -vf "vpp_amf=w=1280:h=720:format=nv12,setsar=1" -c:v h264_amf -f null - >"$log" 2>&1
+            rc=$?
+            if [ "$rc" -eq 0 ]; then
+                report "$c" 0 "decoded successfully; this adapter is not an unsupported one"
+            elif [ "$rc" -ge 128 ]; then
+                report "$c" 0 "ffmpeg died with signal $((rc - 128)) instead of failing cleanly"
+                grep -iE "amf|error" "$log" | tail -4 | sed 's/^/      /'
+            elif grep -q "no hardware decoder for" "$log"; then
+                report "$c" 1 "rejected cleanly (rc=$rc)"
+            else
+                report "$c" 0 "exited $rc without the expected 'no hardware decoder' message"
+                grep -iE "amf|error" "$log" | tail -4 | sed 's/^/      /'
+            fi
             ;;
         *)
             echo "unknown case: $c" >&2
