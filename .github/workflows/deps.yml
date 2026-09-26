@@ -1,0 +1,253 @@
+name: Build dependency images
+
+on:
+  push:
+    branches: [ersatztv]
+    paths:
+      - 'scripts.d/**'
+      - 'images/**'
+      - 'variants/**'
+      - 'addins/**'
+      - 'util/**'
+      - 'generate.sh'
+      - 'download.sh'
+      - '.github/buildkit.toml'
+      - '.github/workflows/deps.yml'
+  workflow_dispatch:
+
+# The chain references intermediate images by :latest, so overlapping runs could
+# build a target image on top of another run's base.
+concurrency:
+  group: deps
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  DOCKER_BUILDKIT: 1
+  VARIANT: gpl 8.1
+
+# No untagged-image cleanup: release lock files pin these images by digest, and
+# every build is also tagged <commit>-<run> so no digest is ever left untagged.
+jobs:
+  build_base:
+    name: Build base image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Free Disk-Space
+        run: ./util/free_disk_space.sh
+      - name: Install buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          buildkitd-config: .github/buildkit.toml
+      - name: Login to Docker
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Image Name
+        id: imagename
+        run: |
+          IMG="${GITHUB_REPOSITORY,,}/base"
+          echo "name=ghcr.io/${IMG}" >> $GITHUB_OUTPUT
+          echo "runtag=${GITHUB_SHA::12}-${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}" >> $GITHUB_OUTPUT
+      - name: Stop Commands
+        run: T="$(echo -n ${{ github.token }} | sha256sum | head -c 64)" && echo -e "::add-mask::${T}\n::stop-commands::${T}"
+      - name: Build base image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: images/base
+          pull: true
+          push: true
+          provenance: false
+          tags: |
+            ${{ steps.imagename.outputs.name }}:latest
+            ${{ steps.imagename.outputs.name }}:${{ steps.imagename.outputs.runtag }}
+          cache-to: type=registry,mode=max,ref=${{ steps.imagename.outputs.name }}:cache
+          cache-from: type=registry,ref=${{ steps.imagename.outputs.name }}:cache
+      - name: Get download cache key
+        id: dl_cache
+        run: |
+          echo "dltagname=$(./util/get_dl_cache_tag.sh)" >> $GITHUB_OUTPUT
+      - name: Cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .cache/downloads
+          key: download-cache-${{ steps.dl_cache.outputs.dltagname }}
+          restore-keys: |
+            download-cache-
+      - name: Update Cache
+        run: |
+          set -e
+          ./download.sh
+          ./util/clean_cache.sh
+          tar czf .cache/cache.tar.gz .cache/downloads/*
+      - name: Upload cache artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: download-cache
+          overwrite: true
+          path: .cache/cache.tar.gz
+
+  build_target_bases:
+    name: Build target base image
+    needs: build_base
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [win64, linux64, linuxarm64]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Free Disk-Space
+        run: ./util/free_disk_space.sh
+      - name: Install buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          buildkitd-config: .github/buildkit.toml
+      - name: Login to Docker
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Image Name
+        id: imagename
+        run: |
+          IMG="${GITHUB_REPOSITORY,,}/base-${{ matrix.target }}"
+          echo "name=ghcr.io/${IMG}" >> $GITHUB_OUTPUT
+          echo "gh_repo=${GITHUB_REPOSITORY,,}" >> $GITHUB_OUTPUT
+          echo "runtag=${GITHUB_SHA::12}-${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}" >> $GITHUB_OUTPUT
+      - name: Stop Commands
+        run: T="$(echo -n ${{ github.token }} | sha256sum | head -c 64)" && echo -e "::add-mask::${T}\n::stop-commands::${T}"
+      - name: Build target base image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: images/base-${{ matrix.target }}
+          pull: true
+          push: true
+          provenance: false
+          tags: |
+            ${{ steps.imagename.outputs.name }}:latest
+            ${{ steps.imagename.outputs.name }}:${{ steps.imagename.outputs.runtag }}
+          cache-to: type=registry,mode=max,ref=${{ steps.imagename.outputs.name }}:cache
+          cache-from: type=registry,ref=${{ steps.imagename.outputs.name }}:cache
+          build-args: |
+            GH_REPO=ghcr.io/${{ steps.imagename.outputs.gh_repo }}
+
+  build_targets:
+    name: Build target-variant image
+    needs: build_target_bases
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [win64, linux64, linuxarm64]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Free Disk-Space
+        run: ./util/free_disk_space.sh
+      - name: Install buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          buildkitd-config: .github/buildkit.toml
+      - name: Login to Docker
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Image Name
+        id: imagename
+        run: |
+          IMG="${GITHUB_REPOSITORY,,}/${{ matrix.target }}-${VARIANT}"
+          IMG="${IMG// /-}"
+          echo "name=ghcr.io/${IMG}" >> $GITHUB_OUTPUT
+          echo "runtag=${GITHUB_SHA::12}-${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}" >> $GITHUB_OUTPUT
+      - name: Get download cache key
+        id: dl_cache
+        run: |
+          echo "dltagname=$(./util/get_dl_cache_tag.sh)" >> $GITHUB_OUTPUT
+      - name: Stop Commands
+        run: T="$(echo -n ${{ github.token }} | sha256sum | head -c 64)" && echo -e "::add-mask::${T}\n::stop-commands::${T}"
+      - name: Generate Dockerfile
+        run: ./generate.sh ${{ matrix.target }} ${VARIANT}
+      - name: Cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .cache/downloads
+          key: download-cache-${{ steps.dl_cache.outputs.dltagname }}
+          fail-on-cache-miss: true
+      - name: Build target-variant image
+        id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          pull: true
+          push: true
+          provenance: false
+          tags: |
+            ${{ steps.imagename.outputs.name }}:latest
+            ${{ steps.imagename.outputs.name }}:${{ steps.imagename.outputs.runtag }}
+          cache-to: type=registry,mode=max,ref=${{ steps.imagename.outputs.name }}:cache
+          cache-from: type=registry,ref=${{ steps.imagename.outputs.name }}:cache
+      - name: Record digest
+        env:
+          TARGET: ${{ matrix.target }}
+          IMAGE: ${{ steps.imagename.outputs.name }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "unexpected digest: '$DIGEST'" >&2; exit 1; }
+          mkdir -p lock
+          jq -n --arg t "$TARGET" --arg ref "$IMAGE@$DIGEST" '{($t): $ref}' > "lock/$TARGET.json"
+      - name: Upload digest
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: lock-${{ matrix.target }}
+          path: lock/${{ matrix.target }}.json
+
+  lock:
+    name: Export image lock
+    needs: build_targets
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: lock-*
+          merge-multiple: true
+          path: lock
+      - name: Assemble images.lock.json
+        run: |
+          set -e
+          jq -s --arg commit "$GITHUB_SHA" --arg variant "$VARIANT" \
+            '{fork_commit: $commit, variant: $variant, images: add}' lock/*.json > images.lock.json
+          jq -e '.images | keys == ["linux64", "linuxarm64", "win64"]' images.lock.json >/dev/null
+          {
+            echo '### images.lock.json'
+            echo
+            echo '```json'
+            cat images.lock.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload images.lock.json
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: images-lock
+          path: images.lock.json
