@@ -24,6 +24,29 @@ FFMPEG_REPO="${FFMPEG_REPO_OVERRIDE:-$FFMPEG_REPO}"
 GIT_BRANCH="${GIT_BRANCH:-master}"
 GIT_BRANCH="${GIT_BRANCH_OVERRIDE:-$GIT_BRANCH}"
 
+# Release builds must be fully specified by the caller: a digest-pinned dependency
+# image (never a floating :latest), the expected upstream commit, and an explicit
+# patch set and version suffix. Nothing may fall back to a local default.
+if [[ -n "$FFBUILD_RELEASE" ]]; then
+    fail() { echo "FFBUILD_RELEASE: $*" >&2; exit 1; }
+    [[ "$IMAGE_OVERRIDE" =~ @sha256:[0-9a-f]{64}$ ]] || fail "IMAGE_OVERRIDE must be a digest reference"
+    [[ "$FFMPEG_COMMIT" =~ ^[0-9a-f]{40}$ ]] || fail "FFMPEG_COMMIT must be a full commit SHA"
+    [[ -n "$GIT_BRANCH_OVERRIDE" ]] || fail "GIT_BRANCH_OVERRIDE must be set"
+    [[ -n "$FFBUILD_VERSION_SUFFIX" ]] || fail "FFBUILD_VERSION_SUFFIX must be set"
+    [[ "$FFMPEG_PATCHES_DIR" == /* ]] || fail "FFMPEG_PATCHES_DIR must be an absolute path"
+    compgen -G "$FFMPEG_PATCHES_DIR/*.patch" >/dev/null || fail "no patches in $FFMPEG_PATCHES_DIR"
+fi
+
+IMAGE="${IMAGE_OVERRIDE:-$IMAGE}"
+
+PATCHES_MOUNT=()
+if [[ -n "$FFMPEG_PATCHES_DIR" ]]; then
+    [[ -d "$FFMPEG_PATCHES_DIR" ]] || { echo "FFMPEG_PATCHES_DIR not found: $FFMPEG_PATCHES_DIR" >&2; exit 1; }
+    PATCHES_MOUNT=( -v "$(realpath "$FFMPEG_PATCHES_DIR")":/ffmpeg-patches:ro )
+elif [[ -d ffmpeg-patches ]]; then
+    PATCHES_MOUNT=( -v "$PWD/ffmpeg-patches":/ffmpeg-patches:ro )
+fi
+
 # Marker appended to the FFmpeg version so a patched build is distinguishable
 # from a stock release. Drives both the artifact filename and `ffmpeg -version`.
 # Defaults to the short commit of this repo, which pins everything that makes
@@ -56,6 +79,11 @@ cat <<EOF >"$BUILD_SCRIPT"
     git clone --filter=blob:none --branch='$GIT_BRANCH' '$FFMPEG_REPO' ffmpeg
     cd ffmpeg
 
+    if [ -n '$FFMPEG_COMMIT' ] && [ "\$(git rev-parse HEAD)" != '$FFMPEG_COMMIT' ]; then
+        echo "Expected FFmpeg commit $FFMPEG_COMMIT for $GIT_BRANCH, got \$(git rev-parse HEAD)" >&2
+        exit 1
+    fi
+
     if [ -d /ffmpeg-patches ]; then
         for p in /ffmpeg-patches/*.patch; do
             [ -e "\$p" ] || continue
@@ -68,14 +96,14 @@ cat <<EOF >"$BUILD_SCRIPT"
         --extra-cflags="\$FF_CFLAGS" --extra-cxxflags="\$FF_CXXFLAGS" --extra-libs="\$FF_LIBS" \
         --extra-ldflags="\$FF_LDFLAGS" --extra-ldexeflags="\$FF_LDEXEFLAGS"'$RPATH_LDEXEFLAGS' \
         --cc="\$CC" --cxx="\$CXX" --ar="\$AR" --ranlib="\$RANLIB" --nm="\$NM" \
-        --extra-version="\$(date +%Y%m%d)${FFBUILD_VERSION_SUFFIX:+-}${FFBUILD_VERSION_SUFFIX}" || { cat ffbuild/config.log; exit 1; }
+        ${FFBUILD_VERSION_SUFFIX:+--extra-version='$FFBUILD_VERSION_SUFFIX'} || { cat ffbuild/config.log; exit 1; }
     make -j\$(nproc) V=1
     make install install-doc
 EOF
 
 [[ -t 1 ]] && TTY_ARG="-t" || TTY_ARG=""
 
-docker run --rm -i $TTY_ARG "${UIDARGS[@]}" -v "$PWD/ffbuild":/ffbuild -v "$PWD/ffmpeg-patches":/ffmpeg-patches -v "$BUILD_SCRIPT":/build.sh "$IMAGE" bash /build.sh
+docker run --rm -i $TTY_ARG "${UIDARGS[@]}" -v "$PWD/ffbuild":/ffbuild "${PATCHES_MOUNT[@]}" -v "$BUILD_SCRIPT":/build.sh "$IMAGE" bash /build.sh
 
 if [[ -n "$FFBUILD_OUTPUT_DIR" ]]; then
     mkdir -p "$FFBUILD_OUTPUT_DIR"
