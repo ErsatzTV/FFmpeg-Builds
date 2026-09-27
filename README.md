@@ -1,3 +1,21 @@
+# ErsatzTV fork of FFmpeg-Builds
+
+This fork is not a standalone entry point and publishes no ffmpeg releases. It is the native build
+recipe for [ErsatzTV-ffmpeg](https://github.com/ErsatzTV/ErsatzTV-ffmpeg), which pins it as a
+submodule and supplies everything that makes a build ETV's: the ffmpeg patch set, the upstream
+release commit, the locked dependency image digests and the version suffix. Get ETV ffmpeg builds
+from the [ErsatzTV-ffmpeg releases](https://github.com/ErsatzTV/ErsatzTV-ffmpeg/releases).
+
+What this fork adds on top of BtbN's recipes:
+
+- `build.sh` release mode (`FFBUILD_RELEASE=1`): requires a digest-pinned dependency image, the
+  expected upstream commit, an explicit patch directory (`FFMPEG_PATCHES_DIR`) and version suffix.
+- `.github/workflows/deps.yml`: builds and publishes only the `gpl 8.1` dependency images for
+  win64, linux64 and linuxarm64, and exports their digests as `images.lock.json`. There are no
+  scheduled or release builds.
+
+Upstream's README follows; its auto-build and release sections do not apply to this fork.
+
 # FFmpeg Static Auto-Builds
 
 Static Windows (x86_64) and Linux (x86_64) Builds of ffmpeg master and latest release branch.
