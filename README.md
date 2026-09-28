@@ -13,6 +13,10 @@ What this fork adds on top of BtbN's recipes:
 - `.github/workflows/deps.yml`: builds and publishes only the `gpl 8.1` dependency images for
   win64, linux64 and linuxarm64, and exports their digests as `images.lock.json`. There are no
   scheduled or release builds.
+- Dependency changes: libva pinned to 2.20.0 (`scripts.d/50-vaapi/50-libva.sh`) so linux64 builds
+  run on distros that ship libva 2.20, and a libvpl dispatcher patch
+  (`patches/libvpl/`) that finds legacy Media SDK runtimes on an Intel GPU that is not the primary
+  adapter (see [intel/libvpl#187](https://github.com/intel/libvpl/pull/187)).
 
 Upstream's README follows; its auto-build and release sections do not apply to this fork.
 

@@ -5,6 +5,7 @@ on:
     branches: [ersatztv]
     paths:
       - 'scripts.d/**'
+      - 'patches/**'
       - 'images/**'
       - 'variants/**'
       - 'addins/**'
