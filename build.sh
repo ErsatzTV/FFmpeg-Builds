@@ -39,6 +39,10 @@ fi
 
 IMAGE="${IMAGE_OVERRIDE:-$IMAGE}"
 
+# FF_CONFIGURE is baked into the image; caller flags go after it so they win
+# without a dependency image rebuild.
+FF_CONFIGURE_EXTRA="${FF_CONFIGURE_EXTRA:-}"
+
 PATCHES_MOUNT=()
 if [[ -n "$FFMPEG_PATCHES_DIR" ]]; then
     [[ -d "$FFMPEG_PATCHES_DIR" ]] || { echo "FFMPEG_PATCHES_DIR not found: $FFMPEG_PATCHES_DIR" >&2; exit 1; }
@@ -74,7 +78,7 @@ cat <<EOF >"$BUILD_SCRIPT"
         done
     fi
 
-    ./configure --prefix=/ffbuild/prefix --pkg-config-flags="--static" \$FFBUILD_TARGET_FLAGS \$FF_CONFIGURE \
+    ./configure --prefix=/ffbuild/prefix --pkg-config-flags="--static" \$FFBUILD_TARGET_FLAGS \$FF_CONFIGURE $FF_CONFIGURE_EXTRA \
         --extra-cflags="\$FF_CFLAGS" --extra-cxxflags="\$FF_CXXFLAGS" --extra-libs="\$FF_LIBS" \
         --extra-ldflags="\$FF_LDFLAGS" --extra-ldexeflags="\$FF_LDEXEFLAGS"'$RPATH_LDEXEFLAGS' \
         --cc="\$CC" --cxx="\$CXX" --ar="\$AR" --ranlib="\$RANLIB" --nm="\$NM" \
