@@ -91,7 +91,7 @@ jobs:
           ./util/clean_cache.sh
           tar czf .cache/cache.tar.gz .cache/downloads/*
       - name: Upload cache artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: download-cache
           overwrite: true
@@ -217,7 +217,7 @@ jobs:
           mkdir -p lock
           jq -n --arg t "$TARGET" --arg ref "$IMAGE@$DIGEST" '{($t): $ref}' > "lock/$TARGET.json"
       - name: Upload digest
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: lock-${{ matrix.target }}
           path: lock/${{ matrix.target }}.json
@@ -248,7 +248,7 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Upload images.lock.json
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: images-lock
           path: images.lock.json
